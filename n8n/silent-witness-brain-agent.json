@@ -9,7 +9,7 @@
         "responseMode": "onReceived",
         "options": {}
       },
-      "id": "ad6baf59-9769-4618-a690-6e33f5b8dcb8",
+      "id": "6d9e0d9e-70e0-4f1f-8ec8-4ccdea50c332",
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
@@ -17,7 +17,7 @@
         0,
         300
       ],
-      "webhookId": "3f9ee42d-ca5f-4cc5-bd7a-eb049474f6b5",
+      "webhookId": "9c750917-db60-4708-a2ae-f123dce0c88c",
       "notes": "Supabase Database Webhook (INSERT on ai_requests)",
       "notesInFlow": true
     },
@@ -31,7 +31,7 @@
           },
           "conditions": [
             {
-              "id": "f7ff275a-690e-4c06-88ed-eafd06c5dcd8",
+              "id": "ee59cea3-09b3-4257-95d0-85a5d294f226",
               "leftValue": "={{ $json.body.type }}",
               "rightValue": "INSERT",
               "operator": {
@@ -40,7 +40,7 @@
               }
             },
             {
-              "id": "9d2289ee-9d89-4f68-bda1-fd437ba66366",
+              "id": "13b41f10-3df2-4c3b-ae5e-5d9603ebd3a3",
               "leftValue": "={{ $json.body.table }}",
               "rightValue": "ai_requests",
               "operator": {
@@ -49,7 +49,7 @@
               }
             },
             {
-              "id": "93234498-d29b-4b94-a505-1ad6630c83ab",
+              "id": "9988d413-b16d-4720-930b-f87c76d51a2b",
               "leftValue": "={{ $json.body.record.status }}",
               "rightValue": "pending",
               "operator": {
@@ -62,7 +62,7 @@
         },
         "options": {}
       },
-      "id": "9db73947-67c4-4b80-9013-26ded6c8f543",
+      "id": "dc0aa181-04d3-4256-bd78-82ffc10f2e5e",
       "name": "New Request?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
@@ -95,7 +95,7 @@
           ]
         }
       },
-      "id": "ad4390b9-b3a9-41f5-9bdc-e6caada35034",
+      "id": "6317254c-a4b3-442a-93e8-52b1b60d9a0d",
       "name": "Mark Processing",
       "type": "n8n-nodes-base.supabase",
       "typeVersion": 1,
@@ -114,7 +114,7 @@
           "maxIterations": 12
         }
       },
-      "id": "e172409d-df67-4d5d-8fb9-59b1c8908e6e",
+      "id": "f578e77a-eb70-45d6-a3f1-edc619ca1d08",
       "name": "Brain Agent",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.7,
@@ -138,7 +138,7 @@
           "temperature": 0.5
         }
       },
-      "id": "fb5dfd25-309e-4163-b090-845bfc9c6da0",
+      "id": "9f76b8be-0c3f-48fe-b5fb-9fe5761314ed",
       "name": "Claude (Executive)",
       "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
       "typeVersion": 1.3,
@@ -153,7 +153,7 @@
         "sessionKey": "={{ $('Webhook').item.json.body.record.session_id }}",
         "contextWindowLength": 12
       },
-      "id": "d55dbaa4-bd29-4872-ab41-ca444561863f",
+      "id": "850338cb-10cc-41d0-8bf8-ed0e35e63861",
       "name": "Working Memory",
       "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
       "typeVersion": 1.3,
@@ -178,7 +178,7 @@
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "supabaseApi"
       },
-      "id": "d938345c-792d-423a-b403-7554c37f9e7b",
+      "id": "6d15fa87-54f8-4598-8d51-8932db4148df",
       "name": "brand_guide",
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.2,
@@ -203,7 +203,7 @@
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "supabaseApi"
       },
-      "id": "6931481c-7023-44b3-96d2-01ef3617b6d0",
+      "id": "3f44e848-ed05-4bf8-8d99-e3ce4bd39755",
       "name": "search_library",
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.2,
@@ -218,7 +218,7 @@
       "parameters": {
         "toolDescription": "Research with Gemini plus live Google Search. Input: one focused research question. Returns grounded findings with uncertainties flagged.",
         "method": "POST",
-        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Research this accurately and concisely. Name sources and traditions. Flag anything uncertain or disputed.\\n\\n' + $fromAI('question', 'A focused research question', 'string') }] }], tools: [{ google_search: {} }] }) }}",
@@ -228,7 +228,7 @@
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth"
       },
-      "id": "34589ecc-75b9-4484-99e3-eb37d2448968",
+      "id": "9e008ec4-9e7d-432c-ac13-b6e91e0a2b4d",
       "name": "research_gemini",
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.2,
@@ -253,7 +253,7 @@
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth"
       },
-      "id": "236c2813-18f9-4ff6-96eb-739a423e2156",
+      "id": "821100ac-bbe8-437b-bd88-429a25bea42f",
       "name": "brainstorm_chatgpt",
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.2,
@@ -373,7 +373,7 @@
           "convertFieldsToString": false
         }
       },
-      "id": "39a8d04a-3782-4e7f-beb2-6c5eda9dab2a",
+      "id": "0e2df30c-0fbb-4bc1-8adf-f36ea8946b64",
       "name": "write_full_script",
       "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
       "typeVersion": 2.2,
@@ -407,7 +407,7 @@
           ]
         }
       },
-      "id": "2bfdd5a3-0ca1-465e-a974-33873a961833",
+      "id": "b80796b6-bab0-4c98-baf1-8b9538c81b58",
       "name": "save_short_content",
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.2,
@@ -446,7 +446,7 @@
           ]
         }
       },
-      "id": "e282f1c5-af7e-4dba-9579-e224d37a86f7",
+      "id": "06fe2d56-8592-46ab-94f4-064c6392b399",
       "name": "Save Answer",
       "type": "n8n-nodes-base.supabase",
       "typeVersion": 1,
@@ -484,7 +484,7 @@
           ]
         }
       },
-      "id": "6912bb72-d21e-4656-bf93-08bd8e7c0bad",
+      "id": "a513cb76-b3ab-4be3-aad8-da1b4e58b41c",
       "name": "Save Error",
       "type": "n8n-nodes-base.supabase",
       "typeVersion": 1,
@@ -500,7 +500,7 @@
         "width": 440,
         "height": 520
       },
-      "id": "a3f8637a-074c-4b32-962e-eec1c3e36a89",
+      "id": "8e6cb905-be00-41eb-97c4-85abbc2ebf45",
       "name": "Setup Note",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,

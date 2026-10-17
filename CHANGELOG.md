@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.1.1 — 2026-10-17
+- **Cost split for Gemini:** research uses `gemini-3.1-flash-lite` (about 8x cheaper per token), the critic keeps `gemini-3.1-pro-preview`. Set separately in Config (`geminiResearchModel`, `geminiCriticModel`); the agent's research_gemini tool also uses Flash-Lite.
+
 ## v1.1 — 2026-10-17
 Brand context: the knowledge previously locked in ChatGPT's memory is now shared by every model.
 
