@@ -1,0 +1,745 @@
+{
+  "name": "Silent Witness - Content Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "topic"
+            },
+            {
+              "name": "track"
+            },
+            {
+              "name": "format"
+            },
+            {
+              "name": "stage"
+            },
+            {
+              "name": "length_note"
+            },
+            {
+              "name": "audience"
+            },
+            {
+              "name": "notes"
+            },
+            {
+              "name": "request_id"
+            },
+            {
+              "name": "user_id"
+            }
+          ]
+        }
+      },
+      "id": "97224c6c-2c80-47be-bf6f-c16eaad99b18",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ================== EDIT YOUR SETTINGS HERE ==================\nconst SETTINGS = {\n  supabaseUrl: 'https://YOUR-PROJECT.supabase.co',   // Supabase -> Project Settings -> API -> Project URL\n  claudeModel: 'claude-sonnet-5-5',\n  openaiModel: 'gpt-5',                    // use the newest OpenAI model your key can access\n  geminiModel: 'gemini-2.5-pro',           // use the newest Gemini model your key can access\n  embeddingModel: 'text-embedding-3-small',// must be 1536-dim to match the database\n  maxRevisions: 2,                         // feedback-loop limit\n  passScore: 8,                            // critic score (1-10) needed to approve\n  similarityThreshold: 0.85                // warn when new content is this similar to old\n};\n// Brand voice, audience, Aadu & Coco bible etc. come from the brand_context\n// table (edit them in the Studio's Brand page, not here).\n// ==============================================================\n\nconst f = $input.item.json;\nconst FORMATS = ['reel','short','post','carousel','story','long_video','guided_meditation','sleep_video','music','kids_story','coloring_page','article','recipe','script'];\nconst TRACKS = ['spiritual','kids','builder','lifestyle'];\nconst fmt = String(f.format || '').trim().toLowerCase();\nconst trk = String(f.track || '').trim().toLowerCase();\nconst st = parseInt(f.stage, 10);\nconst clean = v => (v === undefined || v === null || String(v).trim() === '' || String(v) === 'null') ? '' : String(v).trim();\n\nconst ctx = {\n  ...SETTINGS,\n  topic: clean(f.topic),\n  track: TRACKS.includes(trk) ? trk : 'spiritual',\n  format: FORMATS.includes(fmt) ? fmt : 'script',\n  stage: st >= 1 && st <= 7 ? st : null,\n  lengthNote: clean(f.length_note),\n  notes: clean(f.notes),\n  requestId: clean(f.request_id) || null,\n  userId: clean(f.user_id) || null\n};\nctx.audience = clean(f.audience) || (ctx.track === 'kids' ? 'children aged 4-8 and their parents'\n  : ctx.track === 'builder' ? 'curious non-technical creators and solo founders interested in AI automation'\n  : 'adults roughly 30-55 who function in ordinary life but have begun asking deeper questions');\nif (!ctx.topic) throw new Error('A topic is required');\nreturn { json: { ctx } };",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "ce4a9f6d-0152-4e37-a476-5f6542226e99",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "notes": "Edit settings here",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.ctx.supabaseUrl + '/rest/v1/stages?select=*&order=id.asc' }}",
+        "options": {
+          "timeout": 180000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi"
+      },
+      "id": "d9bec426-a14f-4746-9aa7-31d2ef06fb36",
+      "name": "Fetch Stages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Seven stages + guidelines",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.ctx.supabaseUrl + '/rest/v1/rpc/get_brand_context' }}",
+        "options": {
+          "timeout": 180000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_track: $('Config').first().json.ctx.track }) }}"
+      },
+      "id": "3c91e090-c1fa-4718-961e-cf90bfcc8322",
+      "name": "Fetch Brand Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Brand bible for this track",
+      "notesInFlow": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = JSON.parse(JSON.stringify($('Config').first().json.ctx));\nctx.stages = $('Fetch Stages').all().map(i => i.json).filter(s => s && s.id);\nconst brand = $input.first().json || {};\nctx.brandContext = String(brand.content || '').trim();\nctx.brandSections = Number(brand.sections) || 0;\nif (!ctx.brandContext) throw new Error('Brand context is empty - run db/002_brand_context.sql');\nconst fmtStage = s => `${s.id}. ${s.name} - \"${s.core_question}\" (${s.orientation})\\n   Guidelines: ${s.content_guidelines}`;\nconst chosen = ctx.stages.find(s => s.id === ctx.stage);\n\nif (ctx.track === 'builder') {\n  ctx.stageGuide = chosen ? `Optional stage link:\\n${fmtStage(chosen)}` : 'Stage framework not required (builder content about how the AI systems were built).';\n} else if (chosen) {\n  ctx.stageGuide = `TARGET STAGE:\\n${fmtStage(chosen)}`;\n} else {\n  ctx.stageGuide = `STAGE: not specified. Choose the single most fitting stage from this seven-stage framework and follow its guidelines:\\n${ctx.stages.map(fmtStage).join('\\n')}`;\n}\n\nconst FORMAT_GUIDE = {\n  reel: '30-60 second vertical video built on ONE powerful observation: hook line (first 2 s) that names a recognisable experience, 4-7 short spoken lines, matching on-screen text, one closing question; then a visual direction, an Instagram caption that says what the account helps people understand and points to the related next post, and 5-8 hashtags.',\n  short: '30-60 second YouTube Short built on ONE observation: hook naming a recognisable experience, 4-7 spoken lines, on-screen text, one closing question, title, and a pointer to the related longer video or series.',\n  post: 'Instagram single-image post: one central idea, image concept in the brand visual style, caption (120-220 words) ending with a reflection question, 5-8 hashtags.',\n  carousel: 'Instagram carousel (4:5): ONE main idea per slide, short readable text (max ~20 words per slide), slide count follows the content (usually 6-9). Adult structure: recognisable problem or question -> common interpretation -> deeper psychological explanation -> relatable example -> reframe -> reflection or next step. For each slide give the text and a one-line visual direction; then a caption and hashtags.',\n  story: '3-5 Instagram story frames with text and an interaction (poll or question).',\n  long_video: 'YouTube video script, 8-12 minutes: hook, intro, 3-5 sections with timestamps, practice, close, plus title, description and chapters.',\n  guided_meditation: 'Spoken guided meditation script with [pause 5s] style markers, settling, main practice, gentle return. Plus title and description.',\n  sleep_video: 'Very slow sleep meditation script with long [pause] markers, body relaxation, imagery, fading out. Plus title, description and visual scene prompts.',\n  music: 'Music concept: mood, tempo, instruments, structure, and a prompt for an AI music tool. Lyrics only if original.',\n  kids_story: 'Aadu & Coco story as an Instagram 4:5 carousel or picture book of 8-12 slides: one scene and one clear idea per slide (1-3 short sentences for a cream banner), plus a one-line illustration prompt per slide that restates the fixed character designs; the lesson emerges through choices and consequences; end with a gentle reflection question for children and parents.',\n  coloring_page: '6-10 coloring page concepts: scene description, black-and-white line-art prompt, and one caption line each.',\n  article: 'Article of 800-1200 words with headings and a practical takeaway.',\n  recipe: 'Vegan recipe: ingredients with amounts, steps, prep time, and a mindful-eating note.',\n  script: 'Clear, well-structured script suited to the requested format.'\n};\nctx.formatGuide = FORMAT_GUIDE[ctx.format] || FORMAT_GUIDE.script;\n\nconst prompt = `ROLE: You are the PERCEPTION layer of a multi-agent content system for \"Silent Witness\".\nResearch the topic and produce an accurate, well-grounded brief.\n\nTOPIC: ${ctx.topic}\nTRACK: ${ctx.track}\nFORMAT: ${ctx.format}\nAUDIENCE: ${ctx.audience}\nNOTES: ${ctx.notes || '-'}\n${ctx.stageGuide}\n\nReturn:\n1. Core concepts explained plainly\n2. Relevant traditions, texts, teachers or sources (only attributions you are confident about; name the tradition)\n3. Common misconceptions\n4. Practical takeaways or exercises\n5. Anything uncertain or disputed - flag it clearly`;\n\nreturn [{ json: { ctx, body: {\n  contents: [{ role: 'user', parts: [{ text: prompt }] }],\n  tools: [{ google_search: {} }]\n} } }];"
+      },
+      "id": "60f7f727-430b-489e-8074-686453591c22",
+      "name": "Research Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + $json.ctx.geminiModel + ':generateContent' }}",
+        "options": {
+          "timeout": 180000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}"
+      },
+      "id": "eb6972d1-6e10-4492-a378-2403d9d5dd02",
+      "name": "Gemini - Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Perception: Gemini + Google Search",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = JSON.parse(JSON.stringify($('Research Prompt').first().json.ctx));\nconst parts = $input.first().json.candidates?.[0]?.content?.parts || [];\nctx.research = parts.map(p => p.text || '').join('\\n').trim();\nif (!ctx.research) throw new Error('Gemini research returned no text');\n\nconst body = {\n  model: ctx.openaiModel,\n  messages: [\n    { role: 'system', content: 'You are the DIVERGENT-THINKING layer of a multi-agent content system. Generate bold, varied, original ideas. Do not self-censor; the executive filters later. Avoid cliches common in spiritual content.' },\n    { role: 'user', content: `BRAND CONTEXT (stay within it):\\n${ctx.brandContext}\\n\\nRESEARCH BRIEF:\\n${ctx.research}\\n\\nTOPIC: ${ctx.topic}\\nFORMAT: ${ctx.format} - ${ctx.formatGuide}\\nAUDIENCE: ${ctx.audience}\\n${ctx.stageGuide}\\n\\nGenerate:\\n- 10 scroll-stopping hooks for the first seconds\\n- 3 distinct angles, each with a one-line pitch\\n- 5 title options\\n- 3 vivid stories, images or metaphors that make the core idea land\\n- 2 unusual, specific details that would make this piece unlike anything else on the topic` }\n  ]\n};\nreturn [{ json: { ctx, body } }];"
+      },
+      "id": "d8493531-0673-445b-834b-29cdd665c171",
+      "name": "Ideas Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "options": {
+          "timeout": 180000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}"
+      },
+      "id": "114af8ca-c1d0-402e-9e43-68d361eb5130",
+      "name": "ChatGPT - Ideas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Divergent thinking: ChatGPT",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nlet ctx;\nif (j.choices) {\n  // first pass: coming from ChatGPT\n  ctx = JSON.parse(JSON.stringify($('Ideas Prompt').first().json.ctx));\n  ctx.ideas = j.choices[0].message.content;\n  ctx.iteration = 0;\n  ctx.history = [];\n} else {\n  // revision pass: coming back from the critic loop\n  ctx = JSON.parse(JSON.stringify(j.ctx));\n  ctx.iteration += 1;\n}\n\nconst kids = ctx.track === 'kids' ? '\\nFollow the Aadu & Coco series bible exactly (character designs, lessons, two-layer storytelling, visual style). Very simple words, short sentences, warmth and gentle humour. No fear-based messages, no philosophy terms.' : '';\nconst builder = ctx.track === 'builder' ? '\\nWrite in first person (\"I built...\"), honest about mistakes, step-by-step and non-technical-friendly. No hype.' : '';\n\nlet user = `RESEARCH BRIEF (facts - stay faithful to this):\\n${ctx.research}\n\nIDEAS (pick the strongest hook and angle; discard the rest):\\n${ctx.ideas}\n\nWrite the final piece.\nTOPIC: ${ctx.topic}\nFORMAT: ${ctx.format} - ${ctx.formatGuide}\nLENGTH: ${ctx.lengthNote || 'as suits the format'}\nAUDIENCE: ${ctx.audience}\nNOTES: ${ctx.notes || '-'}\n${ctx.stageGuide}\n\nBRAND CONTEXT (follow it - voice, audience, claims, formats, things to avoid):\n${ctx.brandContext}${kids}${builder}\n\nFollow the stage guidelines and brand context strictly. One central idea. Recognition before instruction: first articulate the reader's experience accurately, then offer the insight. Include at least one specific, original element (a precise observation, a fresh metaphor or an unusual practice) so the piece is not generic. Return only the finished piece.`;\n\nif (ctx.iteration > 0) {\n  user += `\\n\\n--- REVISION ROUND ${ctx.iteration} ---\\nPREVIOUS DRAFT:\\n${ctx.draft}\\n\\nCRITIC FEEDBACK (score ${ctx.score}/10):\\n${ctx.feedback}\\n\\nRevise the draft to address every point. Return only the full revised piece.`;\n}\n\nconst body = {\n  model: ctx.claudeModel,\n  max_tokens: 6000,\n  system: 'You are the EXECUTIVE layer of the Silent Witness multi-agent content system. You integrate research and ideas into one coherent, original, high-quality piece and act precisely on critic feedback.',\n  messages: [{ role: 'user', content: user }]\n};\nreturn [{ json: { ctx, body } }];"
+      },
+      "id": "3b39fbcf-64d6-45d8-a390-f404a142b0e1",
+      "name": "Prepare Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "options": {
+          "timeout": 180000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        }
+      },
+      "id": "23785999-d9d7-493b-a205-929fda311291",
+      "name": "Claude - Write",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1600,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Executive: Claude",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = JSON.parse(JSON.stringify($('Prepare Draft').first().json.ctx));\nctx.draft = ($input.first().json.content || []).filter(b => b.type === 'text').map(b => b.text).join('\\n').trim();\nif (!ctx.draft) throw new Error('Claude returned an empty draft');\n\nconst prompt = `ROLE: You are the ERROR-DETECTION layer of the Silent Witness content system. Be strict, specific and fair.\n\nRESEARCH BRIEF (ground truth):\\n${ctx.research}\n\n${ctx.stageGuide}\n\nFORMAT REQUIRED: ${ctx.format} - ${ctx.formatGuide}\nAUDIENCE: ${ctx.audience}\n\nBRAND CONTEXT (the standard to judge against):\n${ctx.brandContext}\n\nDRAFT TO REVIEW:\\n${ctx.draft}\n\nScore 1-10 overall. Check:\n- Factual accuracy and correct attribution vs the brief.\n- STAGE GUIDELINES (fail hard if it equates a glimpse or experience of oneness with lasting realization, makes guru-style claims, ranks people by stage, or spiritually bypasses real hardship).\n- CLAIMS AND BOUNDARIES (fail hard if the framework or spiritual ideas are presented as science, or if it diagnoses anyone).\n- Brand voice and the \"things to avoid\" table.\n- One central idea; recognition before instruction; a clear reflection or next step.\n- Format requirements (one idea per slide, readable text, sensible length).\n- For Aadu & Coco: the lesson emerges through choices and consequences (not a lecture), the child is satisfied first, and illustration prompts keep the fixed character designs.\n- Hook strength, clarity, emotional resonance, and originality (would this stand out from generic content on the topic?).\n\nAlso tag the piece for the content library.\n\nReturn JSON only:\n{\n  \"score\": number,\n  \"issues\": [string],\n  \"feedback\": \"concrete, numbered revision instructions\",\n  \"title\": \"best title for the piece\",\n  \"summary\": \"1-2 sentence summary for an app card\",\n  \"primary_stage\": number 1-7 or null,\n  \"secondary_stages\": [numbers 1-7],\n  \"themes\": [2-5 short lowercase themes],\n  \"practices\": [0-4 practices used, e.g. breathwork, body scan, self-inquiry, visualization],\n  \"traditions\": [0-3 traditions referenced, e.g. Advaita, Buddhism, Stoicism],\n  \"uniqueness_note\": \"one sentence on what makes this piece original\"\n}`;\n\nreturn [{ json: { ctx, body: {\n  contents: [{ role: 'user', parts: [{ text: prompt }] }],\n  generationConfig: { responseMimeType: 'application/json', temperature: 0.2 }\n} } }];"
+      },
+      "id": "730ecb42-8fda-497e-856f-ec8d1cb6c41a",
+      "name": "Critic Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + $json.ctx.geminiModel + ':generateContent' }}",
+        "options": {
+          "timeout": 180000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}"
+      },
+      "id": "320e87da-e6aa-494a-8bb2-50fe1f66cc71",
+      "name": "Gemini - Critic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Error detection + auto-tagging",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = JSON.parse(JSON.stringify($('Critic Prompt').first().json.ctx));\nconst raw = $input.first().json.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\nlet critic;\ntry { critic = JSON.parse(raw.replace(/^```json\\s*|```$/g, '')); }\ncatch (e) { critic = { score: 0, issues: ['Critic returned invalid JSON'], feedback: raw.slice(0, 1000) }; }\n\nctx.critic = critic;\nctx.score = Number(critic.score) || 0;\nctx.feedback = critic.feedback || '';\nctx.history.push({ round: ctx.iteration, score: ctx.score, issues: critic.issues || [] });\n\nconst done = ctx.score >= ctx.passScore || ctx.iteration >= ctx.maxRevisions;\nreturn [{ json: { done, ctx } }];"
+      },
+      "id": "4e89dfa5-d404-4b6c-828f-69194bdf299b",
+      "name": "Evaluate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ca470718-2fd1-4730-81ae-09b90aa739f8",
+              "leftValue": "={{ $json.done }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "dbc903cd-f986-4be9-8c71-6f4599cfc4cd",
+      "name": "Approved or Max Rounds?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        300
+      ],
+      "notes": "False = feedback loop back to Claude",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = JSON.parse(JSON.stringify($input.first().json.ctx));\nconst k = c.critic || {};\nconst inRange = n => Number.isInteger(n) && n >= 1 && n <= 7;\nconst ints = a => (Array.isArray(a) ? a : []).map(Number).filter(inRange);\nconst strs = (a, max) => (Array.isArray(a) ? a : []).map(s => String(s).trim().toLowerCase()).filter(Boolean).slice(0, max);\n\nlet stage = c.stage || (inRange(Number(k.primary_stage)) ? Number(k.primary_stage) : null);\nlet feedback = c.feedback;\nif (c.track === 'spiritual' && !stage) {\n  stage = 4;   // required for spiritual content; flagged for you to verify\n  feedback = '[Stage auto-set to 4 (Meaning) - please verify]\\n' + (feedback || '');\n}\n\nconst CHANNELS = {\n  spiritual: ['long_video','guided_meditation','sleep_video','music'].includes(c.format) ? ['yt_meditation','app'] : ['instagram','app'],\n  kids: c.format === 'coloring_page' ? ['amazon_kdp','instagram'] : ['instagram','app'],\n  builder: ['long_video','script','short'].includes(c.format) ? ['yt_builder'] : ['yt_builder','instagram'],\n  lifestyle: ['app','instagram']\n};\n\nconst approved = c.score >= c.passScore;\nconst record = {\n  title: String(k.title || c.topic).slice(0, 200),\n  summary: k.summary || null,\n  body: c.draft,\n  track: c.track,\n  format: c.format,\n  primary_stage: stage,\n  secondary_stages: ints(k.secondary_stages).filter(n => n !== stage),\n  themes: strs(k.themes, 6),\n  practices: strs(k.practices, 5),\n  traditions: (Array.isArray(k.traditions) ? k.traditions : []).map(String).slice(0, 4),\n  audience: c.track === 'kids' ? 'kids' : 'adults',\n  language: 'en',\n  status: approved ? 'in_review' : 'draft',\n  critic_score: Math.max(0, Math.min(10, c.score)),\n  critic_feedback: feedback,\n  revision_rounds: c.iteration,\n  uniqueness_note: k.uniqueness_note || null,\n  ai_contributions: {\n    research: 'gemini:' + c.geminiModel, ideas: 'openai:' + c.openaiModel,\n    script: 'anthropic:' + c.claudeModel, critic: 'gemini:' + c.geminiModel,\n    score_history: c.history.map(h => h.score),\n    brand_sections: c.brandSections\n  },\n  synthetic_media: false,\n  source_request_id: c.requestId,\n  target_channels: CHANNELS[c.track] || ['app'],\n  app_visible: false\n};\nif (c.userId) record.owner_id = c.userId;\n\nreturn [{ json: { ctx: c, approved, body: record } }];"
+      },
+      "id": "93289b16-fe26-4250-b125-77350601482c",
+      "name": "Build Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.ctx.supabaseUrl + '/rest/v1/content_items' }}",
+        "options": {
+          "timeout": 180000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        }
+      },
+      "id": "8975383c-1054-4db4-b01f-23b7e93c3567",
+      "name": "Save to Library",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2800,
+        160
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Hippocampus: store",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $('Build Record').first().json.ctx;\nconst row = Array.isArray($input.first().json) ? $input.first().json[0] : $input.first().json;\nif (!row || !row.id) throw new Error('Saving to the library failed: ' + JSON.stringify($input.first().json).slice(0, 300));\nconst text = [row.title, row.summary, row.body].filter(Boolean).join('\\n\\n').slice(0, 24000);\nreturn [{ json: { ctx: c, itemId: row.id, body: { model: c.embeddingModel, input: text } } }];"
+      },
+      "id": "216c1df9-96d0-45b0-a202-edcdd5d32dd3",
+      "name": "Embed Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3000,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "options": {
+          "timeout": 180000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}"
+      },
+      "id": "318d04bf-02c6-4e22-b08b-4d51de90e964",
+      "name": "OpenAI - Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3200,
+        160
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').first().json.ctx.supabaseUrl + '/rest/v1/content_items?id=eq.' + $('Embed Prompt').first().json.itemId }}",
+        "options": {
+          "timeout": 180000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ embedding: $json.data[0].embedding }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        }
+      },
+      "id": "df30f6fa-931f-4ee8-a353-1e8eac848fc5",
+      "name": "Store Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3400,
+        160
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.ctx.supabaseUrl + '/rest/v1/rpc/match_content' }}",
+        "options": {
+          "timeout": 180000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query_embedding: $('OpenAI - Embedding').first().json.data[0].embedding, similarity_threshold: $('Config').first().json.ctx.similarityThreshold, max_results: 5, exclude_id: $('Embed Prompt').first().json.itemId }) }}"
+      },
+      "id": "f640a210-067d-4a7d-8a2d-7e7c4be9a297",
+      "name": "Find Similar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3600,
+        160
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true,
+      "notes": "Originality check",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $('Build Record').first().json.ctx;\nconst itemId = $('Embed Prompt').first().json.itemId;\nconst similar = $input.all().map(i => i.json).filter(s => s && s.id && s.id !== itemId);\nconst stageName = (c.stages || []).find(s => s.id === ($('Build Record').first().json.body.primary_stage))?.name || null;\nreturn [{ json: {\n  saved_to_library: true,\n  content_item_id: itemId,\n  title: $('Build Record').first().json.body.title,\n  stage: stageName,\n  status: $('Build Record').first().json.body.status,\n  approved_by_critic: c.score >= c.passScore,\n  critic_score: c.score,\n  revision_rounds: c.iteration,\n  score_history: c.history.map(h => `round ${h.round}: ${h.score}/10`).join(', '),\n  similar_existing: similar.length\n    ? similar.map(s => `${s.title} (${Math.round(s.similarity * 100)}% similar)`).join('; ')\n    : 'none',\n  script: c.draft\n} }];"
+      },
+      "id": "1b9a6b1e-d182-410f-bde8-3c8aa2124fc4",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3800,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Silent Witness - Content Pipeline\nResearch (Gemini) -> Ideas (ChatGPT) -> Draft (Claude) -> Critic (Gemini) -> revise up to 2x -> **save to library** with stage, tags, embedding and similarity check.\n\n### Credentials\n- **Gemini - Research / Critic**: Header Auth `x-goog-api-key`\n- **ChatGPT - Ideas / OpenAI - Embedding**: Header Auth `Authorization` = `Bearer sk-...`\n- **Claude - Write**: Header Auth `x-api-key`\n- **Fetch Stages / Fetch Brand Context / Save to Library / Store Embedding / Find Similar**: Supabase API credential (Project URL + service_role key)\n\n### Settings\nOpen **Config**: set `supabaseUrl` and model names. Brand voice, audience and the Aadu & Coco bible come from the `brand_context` table (edit in the Studio's Brand page).\n\nCalled by the **Brain Agent** (write_full_script tool). Save this workflow first.",
+        "width": 440,
+        "height": 520
+      },
+      "id": "c34eb986-e0af-41ab-8b18-efd0e694619d",
+      "name": "Setup Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -480,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Fetch Stages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Stages": {
+      "main": [
+        [
+          {
+            "node": "Fetch Brand Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Brand Context": {
+      "main": [
+        [
+          {
+            "node": "Research Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Prompt": {
+      "main": [
+        [
+          {
+            "node": "Gemini - Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Research": {
+      "main": [
+        [
+          {
+            "node": "Ideas Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ideas Prompt": {
+      "main": [
+        [
+          {
+            "node": "ChatGPT - Ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ChatGPT - Ideas": {
+      "main": [
+        [
+          {
+            "node": "Prepare Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Draft": {
+      "main": [
+        [
+          {
+            "node": "Claude - Write",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude - Write": {
+      "main": [
+        [
+          {
+            "node": "Critic Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Critic Prompt": {
+      "main": [
+        [
+          {
+            "node": "Gemini - Critic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Critic": {
+      "main": [
+        [
+          {
+            "node": "Evaluate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate": {
+      "main": [
+        [
+          {
+            "node": "Approved or Max Rounds?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved or Max Rounds?": {
+      "main": [
+        [
+          {
+            "node": "Build Record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Record": {
+      "main": [
+        [
+          {
+            "node": "Save to Library",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Library": {
+      "main": [
+        [
+          {
+            "node": "Embed Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Embedding": {
+      "main": [
+        [
+          {
+            "node": "Store Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Embedding": {
+      "main": [
+        [
+          {
+            "node": "Find Similar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Similar": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
