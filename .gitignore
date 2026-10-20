@@ -1,0 +1,32 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials*.json
+
+# n8n raw exports (sanitize first, then save into n8n/)
+exports/
+*.raw.json
+
+# Media and large generated files (keep in storage, not git)
+media/
+*.mp4
+*.mov
+*.wav
+*.mp3
+*.zip
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+.venv/
